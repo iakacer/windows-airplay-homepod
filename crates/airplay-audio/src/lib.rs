@@ -22,7 +22,9 @@ mod streamer;
 mod traits;
 
 pub use decoder::{AudioDecoder, DecodedFrame};
-pub use encoder::{AlacEncoder, AacEncoder, AudioEncoder, EncodedPacket, create_encoder};
+pub use encoder::{AlacEncoder, AudioEncoder, EncodedPacket, create_encoder};
+#[cfg(feature = "aac")]
+pub use encoder::AacEncoder;
 pub use eq::{EqConfig, EqParams, Equalizer};
 pub use live_decoder::{LiveAudioDecoder, LiveFrameSender, LivePcmFrame};
 pub use rtp::{RtpPacket, RtpSender, RtpReceiver, RtpHeader, RetransmitRequest, build_retransmit_response};

@@ -12,6 +12,7 @@ members = [
     "crates/airplay-tui",
     "crates/airplay-bluetooth",
     "crates/airplay-resampler",
+    "crates/homepod-cast",
 ]
 
 [workspace.package]

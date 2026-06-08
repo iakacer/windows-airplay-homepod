@@ -147,6 +147,7 @@ impl AudioEncoder for AlacEncoder {
 }
 
 /// AAC encoder for buffered streaming.
+#[cfg(feature = "aac")]
 pub struct AacEncoder {
     encoder: fdk_aac::enc::Encoder,
     format: AudioFormat,
@@ -156,6 +157,7 @@ pub struct AacEncoder {
     asc: Vec<u8>,
 }
 
+#[cfg(feature = "aac")]
 impl AacEncoder {
     /// Create new AAC encoder.
     pub fn new(format: AudioFormat) -> Result<Self> {
@@ -224,6 +226,7 @@ impl AacEncoder {
     }
 }
 
+#[cfg(feature = "aac")]
 impl AudioEncoder for AacEncoder {
     fn encode(&mut self, samples: &[i16]) -> Result<EncodedPacket> {
         let samples_per_frame = self.format.frames_per_packet as usize * self.format.channels as usize;
@@ -269,6 +272,7 @@ impl AudioEncoder for AacEncoder {
 pub fn create_encoder(format: AudioFormat) -> Result<Box<dyn AudioEncoder>> {
     match format.codec {
         AudioCodec::Alac => Ok(Box::new(AlacEncoder::new(format)?)),
+        #[cfg(feature = "aac")]
         AudioCodec::Aac => Ok(Box::new(AacEncoder::new(format)?)),
         _ => Err(airplay_core::error::StreamingError::InvalidFormat(
             format!("Unsupported codec: {:?}", format.codec)

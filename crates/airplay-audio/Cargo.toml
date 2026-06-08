@@ -22,10 +22,16 @@ spin_sleep = "1.2"
 
 # Audio codecs
 alac-encoder.workspace = true
-fdk-aac.workspace = true
+fdk-aac = { workspace = true, optional = true }
 
 # Audio processing
 biquad = "0.4"
+
+[features]
+default = []
+# AAC encoding (buffered streaming) compiles the vendored fdk-aac C++ source,
+# which fails to build with GCC >= 14. HomePod uses ALAC, so AAC is off by default.
+aac = ["dep:fdk-aac"]
 
 [dev-dependencies]
 tokio-test.workspace = true

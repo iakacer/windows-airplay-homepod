@@ -1,4 +1,19 @@
 /target
+**/*.rs.bk
+
+# Built app — published via GitHub Releases, not committed.
+/dist/
+
+# Upstream analysis/scratch
 framework_analysis
 cross-compile.sh
 deploy-to-pi.sh
+
+# Editor / OS cruft
+.vs/
+.idea/
+*.pdb
+*.user
+Thumbs.db
+desktop.ini
+.DS_Store

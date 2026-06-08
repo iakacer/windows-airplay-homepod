@@ -1,0 +1,29 @@
+[package]
+name = "homepod-cast"
+version = "0.1.0"
+edition = "2021"
+description = "Stream Windows system audio to a HomePod over AirPlay 2"
+
+[[bin]]
+name = "homepod-cast"
+path = "src/main.rs"
+
+[dependencies]
+airplay-core = { path = "../airplay-core" }
+airplay-client = { path = "../airplay-client" }
+airplay-discovery = { path = "../airplay-discovery" }
+airplay-audio = { path = "../airplay-audio" }
+
+wasapi = "0.23"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# System tray UI
+tray-icon = "0.24"
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Foundation",
+] }
