@@ -21,6 +21,33 @@ use wasapi::{initialize_mta, DeviceEnumerator, Direction, SampleType, StreamMode
 const RATE: u32 = 44_100;
 const CHANNELS: u8 = 2;
 
+/// HomePod volume (0.0–1.0) used on first connect, kept low so it doesn't blast.
+pub const DEFAULT_VOLUME: f32 = 0.25;
+
+fn volume_file() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(std::path::Path::new(&appdata).join("HomePodCast").join("volume.txt"))
+}
+
+/// Load the last-used volume (0.0–1.0), or [`DEFAULT_VOLUME`] if none saved.
+pub fn load_volume() -> f32 {
+    volume_file()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map(|v| v.clamp(0.0, 1.0))
+        .unwrap_or(DEFAULT_VOLUME)
+}
+
+/// Persist the chosen volume so it's remembered across runs.
+pub fn save_volume(v: f32) {
+    if let Some(p) = volume_file() {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(p, format!("{:.3}", v.clamp(0.0, 1.0)));
+    }
+}
+
 /// Discover AirPlay 2 audio devices on the LAN, HomePods first.
 pub async fn discover(timeout: Duration) -> anyhow::Result<Vec<Device>> {
     let browser = ServiceBrowser::new()?;
@@ -41,7 +68,7 @@ pub struct Session {
 impl Session {
     /// Connect (AirPlay 2 transient pairing), set up the stream, and start
     /// pushing live system audio to the device.
-    pub async fn start(mut device: Device) -> anyhow::Result<Self> {
+    pub async fn start(mut device: Device, volume: f32) -> anyhow::Result<Self> {
         let ipv4 = device
             .addresses
             .iter()
@@ -71,6 +98,11 @@ impl Session {
         let mut conn = Connection::connect_auto(device, config, "3939").await?;
         conn.setup().await?;
 
+        // Set volume BEFORE audio starts so the first packets aren't at the
+        // library's default of 1.0 (full blast). start_streaming_live re-applies
+        // this same value internally.
+        let _ = conn.set_volume(volume).await;
+
         // Start capture BEFORE start_streaming_live so the buffer pre-fills (with
         // real audio or silence) — otherwise the streamer's buffer-fill wait times
         // out at 0% and starts with underruns.
@@ -94,6 +126,17 @@ impl Session {
             cap_stop,
             cap_handle: Some(cap_handle),
         })
+    }
+
+    /// Send the periodic AirPlay 2 keepalive. The receiver expects this every
+    /// ~2 s; without it the HomePod tears the session down and audio stops.
+    pub async fn feedback(&mut self) {
+        let _ = self.conn.send_feedback().await;
+    }
+
+    /// Change the playback volume (0.0–1.0) on the connected device.
+    pub async fn set_volume(&mut self, volume: f32) {
+        let _ = self.conn.set_volume(volume).await;
     }
 
     /// Stop capture and tear down the AirPlay connection.

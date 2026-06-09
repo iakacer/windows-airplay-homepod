@@ -37,18 +37,21 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             tracing::info!("selftest target: {} ({})", dev.name, dev.model);
-            for round in 1..=2u32 {
-                tracing::info!("=== ROUND {round}: starting session ===");
-                match cast::Session::start(dev.clone()).await {
-                    Ok(s) => {
-                        tracing::info!("ROUND {round}: streaming for 8s (play audio now)");
-                        tokio::time::sleep(Duration::from_secs(8)).await;
-                        s.stop().await;
-                        tracing::info!("ROUND {round}: stopped");
+            tracing::info!("=== starting session ===");
+            match cast::Session::start(dev.clone(), cast::DEFAULT_VOLUME).await {
+                Ok(mut s) => {
+                    let secs = 50u32;
+                    tracing::info!("streaming for {secs}s with 2s keepalive (play audio now)");
+                    let mut elapsed = 0;
+                    while elapsed < secs {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        s.feedback().await;
+                        elapsed += 2;
                     }
-                    Err(e) => tracing::error!("ROUND {round}: start failed: {e:#}"),
+                    s.stop().await;
+                    tracing::info!("stopped");
                 }
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                Err(e) => tracing::error!("start failed: {e:#}"),
             }
             tracing::info!("selftest complete");
         });

@@ -29,8 +29,18 @@ const HOTKEY_ID: i32 = 1;
 enum Cmd {
     Start(usize),
     Stop,
+    SetVolume(f32),
     Quit,
 }
+
+/// Volume presets shown in the tray (label, 0.0–1.0).
+const VOLUME_PRESETS: &[(&str, f32)] = &[
+    ("10%", 0.10),
+    ("25%", 0.25),
+    ("50%", 0.50),
+    ("75%", 0.75),
+    ("100%", 1.00),
+];
 
 /// True state reported by the control thread back to the tray.
 enum Status {
@@ -97,6 +107,20 @@ pub fn run() -> anyhow::Result<()> {
         }
     }
     menu.append(&PredefinedMenuItem::separator())?;
+
+    // Volume submenu (persisted; applied on connect and live while streaming).
+    let init_volume = cast::load_volume();
+    let volume_menu = Submenu::new("Volume", true);
+    let mut vol_checks: Vec<CheckMenuItem> = Vec::new();
+    let mut vol_ids: Vec<MenuId> = Vec::new();
+    for (label, frac) in VOLUME_PRESETS {
+        let checked = (init_volume - frac).abs() < 0.01;
+        let item = CheckMenuItem::new(*label, true, checked, None);
+        vol_ids.push(item.id().clone());
+        volume_menu.append(&item)?;
+        vol_checks.push(item);
+    }
+    menu.append(&volume_menu)?;
 
     // Settings submenu: pick the global toggle shortcut.
     let preset_list = presets();
@@ -179,6 +203,11 @@ pub fn run() -> anyhow::Result<()> {
                 for (i, c) in preset_checks.iter().enumerate() {
                     c.set_checked(i == current_preset);
                 }
+            } else if let Some(vi) = vol_ids.iter().position(|id| *id == ev.id) {
+                let _ = cmd_tx.send(Cmd::SetVolume(VOLUME_PRESETS[vi].1));
+                for (i, c) in vol_checks.iter().enumerate() {
+                    c.set_checked(i == vi);
+                }
             }
         }
 
@@ -232,18 +261,21 @@ fn control_loop(cmd_rx: Receiver<Cmd>, dev_tx: Sender<Vec<String>>, status_tx: S
     let _ = dev_tx.send(devices.iter().map(|d| d.name.clone()).collect());
 
     let mut session: Option<cast::Session> = None;
-    for cmd in cmd_rx {
-        match cmd {
-            Cmd::Start(idx) => {
+    let mut volume = cast::load_volume();
+    let mut last_feedback = std::time::Instant::now();
+    loop {
+        match cmd_rx.recv_timeout(Duration::from_millis(1000)) {
+            Ok(Cmd::Start(idx)) => {
                 if let Some(s) = session.take() {
                     rt.block_on(s.stop());
                 }
                 if let Some(dev) = devices.get(idx).cloned() {
                     let name = dev.name.clone();
-                    match rt.block_on(cast::Session::start(dev)) {
+                    match rt.block_on(cast::Session::start(dev, volume)) {
                         Ok(s) => {
                             tracing::info!("streaming to {name}");
                             session = Some(s);
+                            last_feedback = std::time::Instant::now();
                             let _ = status_tx.send(Status::Streaming(idx));
                         }
                         Err(e) => {
@@ -253,18 +285,36 @@ fn control_loop(cmd_rx: Receiver<Cmd>, dev_tx: Sender<Vec<String>>, status_tx: S
                     }
                 }
             }
-            Cmd::Stop => {
+            Ok(Cmd::Stop) => {
                 if let Some(s) = session.take() {
                     rt.block_on(s.stop());
                     tracing::info!("stopped");
                 }
                 let _ = status_tx.send(Status::Stopped);
             }
-            Cmd::Quit => {
+            Ok(Cmd::SetVolume(v)) => {
+                volume = v;
+                cast::save_volume(v);
+                if let Some(s) = session.as_mut() {
+                    rt.block_on(s.set_volume(v));
+                }
+            }
+            Ok(Cmd::Quit) => {
                 if let Some(s) = session.take() {
                     rt.block_on(s.stop());
                 }
                 break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+
+        // Periodic AirPlay keepalive — without it the HomePod tears down the
+        // session and audio stops after a short while.
+        if let Some(s) = session.as_mut() {
+            if last_feedback.elapsed() >= Duration::from_secs(2) {
+                rt.block_on(s.feedback());
+                last_feedback = std::time::Instant::now();
             }
         }
     }

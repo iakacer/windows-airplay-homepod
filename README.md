@@ -13,6 +13,7 @@ HomePod Cast captures your system audio via WASAPI loopback and streams it over 
   │ ■ Stopped         ✓  │   ← single-tick: exactly one is true
   │ ▶ Living Room        │
   │ ▶ Kitchen            │
+  │ Volume             ▸ │   ← 10–100%, remembered (low default)
   │ Settings           ▸ │   ← global toggle hotkey (Ctrl+Alt+H)
   │ Quit                 │
   └──────────────────────┘
@@ -23,6 +24,7 @@ HomePod Cast captures your system audio via WASAPI loopback and streams it over 
 - One-click streaming to any AirPlay 2 speaker from the system tray
 - Tray icon shows state at a glance (hollow ring = stopped, filled dot = streaming)
 - Single-selection menu — pick a speaker or **Stopped**, the tick follows reality
+- **Volume** control — connects at a low 25% (no jump-scare) and remembers your last setting
 - Global hotkey to toggle on/off from anywhere (**Ctrl+Alt+H**, configurable in Settings)
 - Single ~11 MB executable, no installer, starts stopped
 
@@ -37,7 +39,8 @@ HomePod Cast captures your system audio via WASAPI loopback and streams it over 
 
 1. Run `homepod-cast.exe` — a teal icon appears in the tray (it starts stopped).
 2. Right-click → pick your speaker. Play anything; it comes out of the speaker.
-3. Click **■ Stopped** to stop, or press **Ctrl+Alt+H** to toggle on/off from anywhere.
+3. Right-click → **Volume ▸** to set the level (remembered next time).
+4. Click **■ Stopped** to stop, or press **Ctrl+Alt+H** to toggle on/off from anywhere.
 
 If the speaker never appears or audio won't start, allow the app through the firewall
 (run as admin, adjust the path):
@@ -63,7 +66,8 @@ copies it to `dist/HomePod Cast.exe`.
 
 - Best for **music and podcasts** — AirPlay buffers ~1–2 s, so it's not suited to video
   lip-sync or games.
-- Audio is sent as ALAC over AirPlay 2 with NTP timing.
+- Audio is sent as ALAC over AirPlay 2 with NTP timing; a ~2 s keepalive keeps the session
+  alive so playback doesn't drop.
 
 ## How it relates to airplay2-rs
 
