@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod cast;
+mod settings_window;
 mod tray;
 
 use std::time::Duration;

@@ -13,8 +13,7 @@ HomePod Cast captures your system audio via WASAPI loopback and streams it over 
   │ ■ Stopped         ✓  │   ← single-tick: exactly one is true
   │ ▶ Living Room        │
   │ ▶ Kitchen            │
-  │ Volume             ▸ │   ← 10–100%, remembered (low default)
-  │ Settings           ▸ │   ← global toggle hotkey (Ctrl+Alt+H)
+  │ Settings…            │   ← volume slider + custom toggle hotkey
   │ Quit                 │
   └──────────────────────┘
 ```
@@ -24,8 +23,8 @@ HomePod Cast captures your system audio via WASAPI loopback and streams it over 
 - One-click streaming to any AirPlay 2 speaker from the system tray
 - Tray icon shows state at a glance (hollow ring = stopped, filled dot = streaming)
 - Single-selection menu — pick a speaker or **Stopped**, the tick follows reality
-- **Volume** control — connects at a low 25% (no jump-scare) and remembers your last setting
-- Global hotkey to toggle on/off from anywhere (**Ctrl+Alt+H**, configurable in Settings)
+- **Volume slider** in Settings — applies live, connects at a low 25% (no jump-scare), and remembers your last setting
+- **Custom global hotkey** to toggle on/off from anywhere — press your own combo in Settings (defaults to **Ctrl+Alt+H**), remembered across restarts
 - Single ~11 MB executable, no installer, starts stopped
 
 ## Requirements
@@ -39,8 +38,9 @@ HomePod Cast captures your system audio via WASAPI loopback and streams it over 
 
 1. Run `homepod-cast.exe` — a teal icon appears in the tray (it starts stopped).
 2. Right-click → pick your speaker. Play anything; it comes out of the speaker.
-3. Right-click → **Volume ▸** to set the level (remembered next time).
-4. Click **■ Stopped** to stop, or press **Ctrl+Alt+H** to toggle on/off from anywhere.
+3. Right-click → **Settings…** to drag the volume slider (applies live) or set your own
+   toggle hotkey (click the box, press the keys, click **Save shortcut**).
+4. Click **■ Stopped** to stop, or press your hotkey to toggle on/off from anywhere.
 
 If the speaker never appears or audio won't start, allow the app through the firewall
 (run as admin, adjust the path):

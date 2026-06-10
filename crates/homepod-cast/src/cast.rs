@@ -48,6 +48,29 @@ pub fn save_volume(v: f32) {
     }
 }
 
+fn hotkey_file() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(std::path::Path::new(&appdata).join("HomePodCast").join("hotkey.txt"))
+}
+
+/// Load the saved global toggle hotkey as `(modifiers, virtual_key)` in the
+/// form expected by `RegisterHotKey`, or `None` if nothing is saved yet.
+pub fn load_hotkey() -> Option<(u32, u32)> {
+    let s = std::fs::read_to_string(hotkey_file()?).ok()?;
+    let (m, v) = s.trim().split_once(',')?;
+    Some((m.trim().parse().ok()?, v.trim().parse().ok()?))
+}
+
+/// Persist the global toggle hotkey (`RegisterHotKey` modifiers + virtual key).
+pub fn save_hotkey(mods: u32, vk: u32) {
+    if let Some(p) = hotkey_file() {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(p, format!("{mods},{vk}"));
+    }
+}
+
 /// Discover AirPlay 2 audio devices on the LAN, HomePods first.
 pub async fn discover(timeout: Duration) -> anyhow::Result<Vec<Device>> {
     let browser = ServiceBrowser::new()?;

@@ -4,11 +4,15 @@
 //! into commands. A dedicated control thread owns the tokio runtime and the
 //! active streaming session, and reports the *true* state back so the icon and
 //! check marks stay correct (e.g. if a connection fails).
+//!
+//! Volume and the global toggle hotkey are configured in a small native
+//! settings window (see [`crate::settings_window`]): the slider applies volume
+//! live, and Save reports a new hotkey which the main thread re-registers.
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
-use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -16,14 +20,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::cast;
+use crate::settings_window;
 
 const WM_HOTKEY: u32 = 0x0312;
 const PM_REMOVE: u32 = 0x0001;
 const MOD_ALT: u32 = 0x0001;
 const MOD_CONTROL: u32 = 0x0002;
-const MOD_SHIFT: u32 = 0x0004;
 const MOD_NOREPEAT: u32 = 0x4000;
 const HOTKEY_ID: i32 = 1;
+
+/// Default global toggle hotkey: Ctrl+Alt+H (used until the user picks one).
+const DEFAULT_HOTKEY_MODS: u32 = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+const DEFAULT_HOTKEY_VK: u32 = 0x48; // 'H'
 
 /// Commands sent from the tray to the control thread.
 enum Cmd {
@@ -33,43 +41,19 @@ enum Cmd {
     Quit,
 }
 
-/// Volume presets shown in the tray (label, 0.0–1.0).
-const VOLUME_PRESETS: &[(&str, f32)] = &[
-    ("10%", 0.10),
-    ("25%", 0.25),
-    ("50%", 0.50),
-    ("75%", 0.75),
-    ("100%", 1.00),
-];
-
 /// True state reported by the control thread back to the tray.
 enum Status {
     Streaming(usize),
     Stopped,
 }
 
-/// A selectable global-hotkey preset for the on/off toggle.
-struct Preset {
-    label: &'static str,
-    mods: u32,
-    vk: u32, // 0 = disabled
-}
-
-fn presets() -> Vec<Preset> {
-    vec![
-        Preset { label: "Ctrl+Alt+H", mods: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk: 0x48 },
-        Preset { label: "Ctrl+Shift+H", mods: MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, vk: 0x48 },
-        Preset { label: "Ctrl+Alt+P", mods: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk: 0x50 },
-        Preset { label: "Disabled", mods: 0, vk: 0 },
-    ]
-}
-
-/// Register the given preset as the global toggle hotkey (unregistering first).
-fn set_hotkey(p: &Preset) {
+/// Register the given hotkey as the global toggle (unregistering any prior one).
+/// `vk == 0` disables the hotkey.
+fn set_hotkey(mods: u32, vk: u32) {
     unsafe {
         UnregisterHotKey(std::ptr::null_mut(), HOTKEY_ID);
-        if p.vk != 0 {
-            RegisterHotKey(std::ptr::null_mut(), HOTKEY_ID, p.mods, p.vk);
+        if vk != 0 {
+            RegisterHotKey(std::ptr::null_mut(), HOTKEY_ID, mods, vk);
         }
     }
 }
@@ -78,6 +62,8 @@ pub fn run() -> anyhow::Result<()> {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<Cmd>();
     let (dev_tx, dev_rx) = std::sync::mpsc::channel::<Vec<String>>();
     let (status_tx, status_rx) = std::sync::mpsc::channel::<Status>();
+    // New hotkey chosen in the settings window -> main thread re-registers it.
+    let (hk_tx, hk_rx) = std::sync::mpsc::channel::<(u32, u32)>();
 
     // Control thread: scans for devices, then owns the streaming session.
     let control = std::thread::spawn(move || control_loop(cmd_rx, dev_tx, status_tx));
@@ -108,33 +94,10 @@ pub fn run() -> anyhow::Result<()> {
     }
     menu.append(&PredefinedMenuItem::separator())?;
 
-    // Volume submenu (persisted; applied on connect and live while streaming).
-    let init_volume = cast::load_volume();
-    let volume_menu = Submenu::new("Volume", true);
-    let mut vol_checks: Vec<CheckMenuItem> = Vec::new();
-    let mut vol_ids: Vec<MenuId> = Vec::new();
-    for (label, frac) in VOLUME_PRESETS {
-        let checked = (init_volume - frac).abs() < 0.01;
-        let item = CheckMenuItem::new(*label, true, checked, None);
-        vol_ids.push(item.id().clone());
-        volume_menu.append(&item)?;
-        vol_checks.push(item);
-    }
-    menu.append(&volume_menu)?;
-
-    // Settings submenu: pick the global toggle shortcut.
-    let preset_list = presets();
-    let settings = Submenu::new("Settings", true);
-    settings.append(&MenuItem::new("Toggle on/off shortcut", false, None))?;
-    let mut preset_checks: Vec<CheckMenuItem> = Vec::new();
-    let mut preset_ids: Vec<(MenuId, usize)> = Vec::new();
-    for (i, p) in preset_list.iter().enumerate() {
-        let item = CheckMenuItem::new(p.label, true, i == 0, None);
-        preset_ids.push((item.id().clone(), i));
-        settings.append(&item)?;
-        preset_checks.push(item);
-    }
-    menu.append(&settings)?;
+    // Settings: opens a window with a volume slider and a hotkey capture box.
+    let settings_item = MenuItem::new("Settings\u{2026}", true, None);
+    menu.append(&settings_item)?;
+    let settings_id = settings_item.id().clone();
     menu.append(&PredefinedMenuItem::separator())?;
 
     let quit_item = MenuItem::new("Quit", true, None);
@@ -148,9 +111,10 @@ pub fn run() -> anyhow::Result<()> {
         .with_icon(make_icon(false))
         .build()?;
 
-    // Register the default toggle hotkey.
-    let mut current_preset = 0usize;
-    set_hotkey(&preset_list[current_preset]);
+    // Register the saved toggle hotkey (or the default if none saved yet).
+    let (mut cur_mods, mut cur_vk) =
+        cast::load_hotkey().unwrap_or((DEFAULT_HOTKEY_MODS, DEFAULT_HOTKEY_VK));
+    set_hotkey(cur_mods, cur_vk);
 
     let menu_rx = tray_icon::menu::MenuEvent::receiver();
 
@@ -190,6 +154,22 @@ pub fn run() -> anyhow::Result<()> {
                     active = None;
                 }
                 apply_state(&off_check, &device_checks, &tray, active);
+            } else if ev.id == settings_id {
+                // Open the settings window: volume applies live via Cmd::SetVolume,
+                // a chosen hotkey comes back on hk_tx for the main thread to register.
+                let vol_tx = cmd_tx.clone();
+                let hotkey_tx = hk_tx.clone();
+                settings_window::open(
+                    cast::load_volume(),
+                    cur_mods,
+                    cur_vk,
+                    move |v| {
+                        let _ = vol_tx.send(Cmd::SetVolume(v));
+                    },
+                    move |m, vk| {
+                        let _ = hotkey_tx.send((m, vk));
+                    },
+                );
             } else if let Some(idx) = device_ids.iter().find(|(id, _)| *id == ev.id).map(|(_, i)| *i) {
                 last_device = idx;
                 if active != Some(idx) {
@@ -197,18 +177,15 @@ pub fn run() -> anyhow::Result<()> {
                     active = Some(idx);
                 }
                 apply_state(&off_check, &device_checks, &tray, active);
-            } else if let Some(p) = preset_ids.iter().find(|(id, _)| *id == ev.id).map(|(_, i)| *i) {
-                current_preset = p;
-                set_hotkey(&preset_list[p]);
-                for (i, c) in preset_checks.iter().enumerate() {
-                    c.set_checked(i == current_preset);
-                }
-            } else if let Some(vi) = vol_ids.iter().position(|id| *id == ev.id) {
-                let _ = cmd_tx.send(Cmd::SetVolume(VOLUME_PRESETS[vi].1));
-                for (i, c) in vol_checks.iter().enumerate() {
-                    c.set_checked(i == vi);
-                }
             }
+        }
+
+        // Hotkey chosen in the settings window: re-register and persist.
+        while let Ok((m, vk)) = hk_rx.try_recv() {
+            cur_mods = m;
+            cur_vk = vk;
+            set_hotkey(cur_mods, cur_vk);
+            cast::save_hotkey(cur_mods, cur_vk);
         }
 
         // True state from the control thread (corrects optimistic guesses).
