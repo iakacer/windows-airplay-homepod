@@ -41,11 +41,13 @@ mod playback;
 mod builder;
 mod events;
 mod raop_connection;
+mod receiver_events;
 mod stats;
 
 pub use client::AirPlayClient;
 pub use connection::{Connection, StreamingParams};
 pub use raop_connection::RaopConnection;
+pub use receiver_events::{ReceiverEvent, ReceiverRequest, RemoteCommand};
 pub use group::{DeviceGroup, GroupMember};
 pub use playback::{PlaybackState, PlaybackInfo};
 pub use builder::ClientBuilder;
@@ -55,6 +57,7 @@ pub use stats::{StreamStats, StatsSnapshot, DeviceStatsSnapshot};
 // Re-export commonly used types
 pub use airplay_core::{Device, DeviceId, AudioFormat, StreamConfig, Error, Result};
 pub use airplay_discovery::Discovery;
+pub use airplay_rtsp::dmap::TrackMetadata;
 
 // Live streaming types for external sources (e.g., Bluetooth audio)
 pub use airplay_audio::{LiveAudioDecoder, LiveFrameSender, LivePcmFrame};
@@ -62,6 +65,9 @@ pub use airplay_audio::{LiveAudioDecoder, LiveFrameSender, LivePcmFrame};
 // Equalizer types
 pub use airplay_audio::{EqConfig, EqParams};
 pub use airplay_audio::eq::MAX_GAIN_DB;
+
+// Spatial audio types
+pub use airplay_audio::{SpatialMixer, SpatialParams, SpatialMode, SpatialSnapshot, Position, SpeakerConfig, SpeakerParams};
 
 // Timing types needed for group streaming
 pub use airplay_timing::ClockOffset;

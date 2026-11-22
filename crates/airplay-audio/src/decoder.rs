@@ -8,7 +8,7 @@ use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
-use symphonia::core::io::{MediaSourceStream, ReadOnlySource};
+use symphonia::core::io::{MediaSource, MediaSourceStream, ReadOnlySource};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
@@ -69,6 +69,20 @@ impl AudioDecoder {
         let cursor = Cursor::new(data.to_vec());
         let source = ReadOnlySource::new(cursor);
         let mss = MediaSourceStream::new(Box::new(source), Default::default());
+
+        let mut hint = Hint::new();
+        if let Some(ext) = hint_ext {
+            hint.with_extension(ext);
+        }
+
+        Self::from_media_source(mss, hint)
+    }
+
+    /// Open from any `MediaSource` — e.g. a download that is still in progress,
+    /// whose `Read` blocks until more bytes arrive, so playback can start
+    /// before the whole file is available.
+    pub fn from_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Result<Self> {
+        let mss = MediaSourceStream::new(source, Default::default());
 
         let mut hint = Hint::new();
         if let Some(ext) = hint_ext {
@@ -246,11 +260,16 @@ impl AudioDecoder {
             };
 
             let samples = audio_buffer_to_i16(&decoded);
-            let num_frames = samples.len() / self.channels as usize;
+            // The layout of the decoded data itself, not the container's
+            // header: they can disagree (e.g. a mono stream whose header gave no
+            // channel count and so defaulted to 2), and every consumer indexes
+            // `samples` by this count.
+            let channels = decoded.spec().channels.count().max(1) as u8;
+            let num_frames = samples.len() / channels as usize;
 
             let frame = DecodedFrame {
                 samples,
-                channels: self.channels,
+                channels,
                 sample_rate: self.sample_rate,
                 timestamp: self.position_samples,
             };
@@ -270,12 +289,13 @@ impl AudioDecoder {
         let target_rate = target_format.sample_rate.as_hz();
         let source_rate = self.sample_rate;
 
-        // Initialize resampler lazily if needed
+        // Initialize resampler lazily if needed. It runs after the channel
+        // conversion below, so it works on the target channel count.
         if source_rate != target_rate && self.resampler.is_none() {
             self.resampler = Some(airplay_resampler::Resampler::new(
                 source_rate,
                 target_rate,
-                self.channels,
+                target_format.channels,
             )?);
         }
 
@@ -286,15 +306,20 @@ impl AudioDecoder {
         while collected_samples.len() < target_samples {
             match self.decode_frame()? {
                 Some(frame) => {
+                    let samples = convert_channels(
+                        &frame.samples,
+                        frame.channels as usize,
+                        target_format.channels as usize,
+                    );
                     if source_rate == target_rate {
-                        collected_samples.extend(frame.samples);
+                        collected_samples.extend(samples);
                     } else {
                         // High-quality sinc resampling
                         let resampled = self
                             .resampler
                             .as_mut()
                             .expect("resampler should be initialized")
-                            .process(&frame.samples)?;
+                            .process(&samples)?;
                         collected_samples.extend(resampled);
                     }
                 }
@@ -333,6 +358,55 @@ impl AudioDecoder {
     pub fn is_eof(&self) -> bool {
         self.eof
     }
+}
+
+/// Convert interleaved samples from `from` channels to `to` channels.
+///
+/// The packets sent to a receiver have a fixed channel count (stereo), but
+/// sources don't: a mono file read as if it were stereo plays at twice the
+/// speed and garbled. Mono is duplicated to both sides; 5.1 is down-mixed with
+/// the usual ITU weights (centre and surrounds at -3 dB, LFE dropped); any other
+/// layout is folded by averaging even-numbered channels to the left and
+/// odd-numbered to the right.
+pub(crate) fn convert_channels(samples: &[i16], from: usize, to: usize) -> Vec<i16> {
+    if from == to || from == 0 || to == 0 {
+        return samples.to_vec();
+    }
+    let frames = samples.len() / from;
+    let mut out = Vec::with_capacity(frames * to);
+    for frame in samples.chunks_exact(from) {
+        if to == 2 {
+            let (l, r) = match from {
+                1 => (frame[0] as f32, frame[0] as f32),
+                6 => {
+                    const K: f32 = std::f32::consts::FRAC_1_SQRT_2;
+                    let norm = 1.0 + 2.0 * K;
+                    (
+                        (frame[0] as f32 + K * frame[2] as f32 + K * frame[4] as f32) / norm,
+                        (frame[1] as f32 + K * frame[2] as f32 + K * frame[5] as f32) / norm,
+                    )
+                }
+                _ => {
+                    let (mut ls, mut ln, mut rs, mut rn) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                    for (i, s) in frame.iter().enumerate() {
+                        if i % 2 == 0 {
+                            ls += *s as f32;
+                            ln += 1.0;
+                        } else {
+                            rs += *s as f32;
+                            rn += 1.0;
+                        }
+                    }
+                    (ls / ln, rs / rn)
+                }
+            };
+            out.push(l.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+            out.push(r.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+        } else {
+            out.extend((0..to).map(|c| frame[c % from]));
+        }
+    }
+    out
 }
 
 /// Convert symphonia audio buffer to interleaved i16 samples.
@@ -523,6 +597,40 @@ mod tests {
         fn error_on_nonexistent_file() {
             let result = AudioDecoder::open("/nonexistent/path/file.wav");
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn from_reader_decodes_a_media_source() {
+            let wav_data = create_wav_data(44100, 2, &vec![0i16; 4410 * 2]);
+            let source = ReadOnlySource::new(Cursor::new(wav_data));
+            let decoder = AudioDecoder::from_reader(Box::new(source), Some("wav")).unwrap();
+            assert_eq!(decoder.sample_rate(), 44100);
+            assert_eq!(decoder.channels(), 2);
+        }
+
+        #[test]
+        fn convert_channels_mono_duplicates() {
+            assert_eq!(convert_channels(&[1, 2, 3], 1, 2), vec![1, 1, 2, 2, 3, 3]);
+        }
+
+        #[test]
+        fn convert_channels_same_layout_is_untouched() {
+            assert_eq!(convert_channels(&[1, 2, 3, 4], 2, 2), vec![1, 2, 3, 4]);
+        }
+
+        #[test]
+        fn convert_channels_downmixes_5_1_without_clipping() {
+            // Full-scale in every channel must not exceed full scale.
+            let frame = vec![i16::MAX; 6];
+            let out = convert_channels(&frame, 6, 2);
+            assert_eq!(out.len(), 2);
+            assert!(out.iter().all(|&s| s > 0 && s <= i16::MAX));
+        }
+
+        #[test]
+        fn convert_channels_folds_other_layouts_to_stereo() {
+            // 4 channels: L=10, R=20, L2=30, R2=40 -> averages per side.
+            assert_eq!(convert_channels(&[10, 20, 30, 40], 4, 2), vec![20, 30]);
         }
 
         #[test]

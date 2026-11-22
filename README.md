@@ -76,10 +76,13 @@ implements the AirPlay 2 sender stack (discovery, HomeKit pairing, encryption, A
 timing). HomePod Cast adds:
 
 - `crates/homepod-cast` — the Windows capture + tray application
-- Minor Windows-portability patches to `crates/airplay-audio` (cross-platform socket QoS in
-  `rtp.rs`; `fdk-aac` made an optional `aac` feature, since it won't build on GCC ≥ 14 and
-  HomePod uses ALAC)
+- A minor Windows-portability patch to `crates/airplay-audio`: `fdk-aac` is an optional `aac`
+  feature, since it won't build on GCC ≥ 14 and HomePod uses ALAC (the cross-platform socket
+  QoS fix is now part of upstream)
 
 ## License
 
-GPL-2.0, inherited from airplay2-rs. See [`LICENSE`](LICENSE).
+GPL-3.0-or-later, inherited from airplay2-rs (relicensed upstream from GPL-2.0 in September 2026).
+See [`LICENSE`](LICENSE).
+
+airplay2-rs is Copyright (c) 2026 Lucas McGartland.

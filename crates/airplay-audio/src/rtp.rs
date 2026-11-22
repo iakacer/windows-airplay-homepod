@@ -15,50 +15,35 @@ use std::time::Duration;
 /// Also enlarges the kernel send buffer (SO_SNDBUF) to 1MB to prevent drops
 /// when bursting packets to multiple group devices simultaneously.
 fn set_socket_qos(socket: &UdpSocket) {
-    // Enlarge the send buffer to 1MB. The default is often 128-212KB which can
-    // cause kernel-side drops when bursting to multiple group devices at once.
-    // socket2 does this portably across Unix and Windows.
-    let sock_ref = socket2::SockRef::from(socket);
-    if let Err(e) = sock_ref.set_send_buffer_size(1024 * 1024) {
-        tracing::debug!("Failed to set send buffer size: {}", e);
+    // socket2 wraps the platform socket API, so this works on Unix and Windows.
+    let sock = socket2::SockRef::from(socket);
+
+    // IP_TOS = DSCP EF (0xB8 = 184). The TOS byte is: DSCP (6 bits) + ECN (2 bits).
+    // EF = 46 << 2 = 0xB8.
+    if let Err(e) = sock.set_tos(0xB8) {
+        tracing::debug!("Failed to set IP_TOS (DSCP EF): {}", e);
     }
 
-    // DSCP EF marking (maps to WiFi WMM AC_VO / Voice priority) is only applied
-    // on Unix. Windows ignores IP_TOS set via setsockopt for QoS (it requires the
-    // separate qWAVE API), so we skip it there rather than fail.
-    #[cfg(unix)]
+    // Enlarge send buffer to 1MB. Default is often 128-212KB which can cause
+    // kernel-side drops when bursting to multiple group devices at once.
+    if let Err(e) = sock.set_send_buffer_size(1024 * 1024) {
+        tracing::debug!("Failed to set SO_SNDBUF: {}", e);
+    }
+
+    // On Linux, also set SO_PRIORITY = 6 (maps to TC prio band for AC_VO)
+    #[cfg(target_os = "linux")]
     unsafe {
         use std::os::unix::io::AsRawFd;
-        let fd = socket.as_raw_fd();
-
-        // IP_TOS = DSCP EF (0xB8 = 184). The TOS byte is: DSCP (6 bits) + ECN (2 bits).
-        // EF = 46 << 2 = 0xB8.
-        let tos: libc::c_int = 0xB8;
+        let prio: libc::c_int = 6;
         let ret = libc::setsockopt(
-            fd,
-            libc::IPPROTO_IP,
-            libc::IP_TOS,
-            &tos as *const _ as *const libc::c_void,
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PRIORITY,
+            &prio as *const _ as *const libc::c_void,
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         );
         if ret != 0 {
-            tracing::debug!("Failed to set IP_TOS (DSCP EF): errno={}", std::io::Error::last_os_error());
-        }
-
-        // On Linux, also set SO_PRIORITY = 6 (maps to TC prio band for AC_VO)
-        #[cfg(target_os = "linux")]
-        {
-            let prio: libc::c_int = 6;
-            let ret = libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PRIORITY,
-                &prio as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
-            if ret != 0 {
-                tracing::debug!("Failed to set SO_PRIORITY: errno={}", std::io::Error::last_os_error());
-            }
+            tracing::debug!("Failed to set SO_PRIORITY: errno={}", std::io::Error::last_os_error());
         }
     }
 }
@@ -411,6 +396,13 @@ impl RtpSender {
             first_sync_sent: false,
             packet_history,
         }
+    }
+
+    /// Set the sequence number of the next audio packet. A stream that
+    /// continues the RTP timeline (a new track on an already-playing session)
+    /// must also continue the sequence numbers.
+    pub fn set_next_sequence(&mut self, sequence: u16) {
+        self.sequence = sequence;
     }
 
     /// Set control port destination for sync packets.

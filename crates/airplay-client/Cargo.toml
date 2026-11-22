@@ -2,6 +2,8 @@
 name = "airplay-client"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "High-level AirPlay 2 sender client"
 
 [dependencies]
@@ -13,6 +15,7 @@ airplay-rtsp = { path = "../airplay-rtsp" }
 airplay-audio = { path = "../airplay-audio" }
 airplay-timing = { path = "../airplay-timing" }
 tokio.workspace = true
+plist.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
