@@ -115,6 +115,7 @@ dependencies = [
  "base64",
  "futures",
  "mockall",
+ "plist",
  "rand 0.8.5",
  "serde",
  "serde_json",
